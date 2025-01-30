@@ -51,7 +51,7 @@ class model:
         #Calculate initial derivatives, should be 0 at steady state
         Z = rf.R_mean(self.func, self.states[-1], self.params, self.lambdas[-1])
         f_mean = rf.R_mean(self.func, self.states[-1], self.params, self.lambdas[-1], lambda n: self.func(n, self.states[-1], self.params))/Z 
-        self.derivatives[-1] = f_mean
+        self.derivatives[-1] = f_mean * self.params[self.num_groups]
         
 
 
