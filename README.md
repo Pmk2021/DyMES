@@ -19,5 +19,5 @@ to install all dependencies
 All necessary functions are documented in the notebook `run_model.ipynb`
 
 ## TODO
-1. Modify the probability distribution summation.
-2. Add the lambda dynamics method.
+1. Modify the probability distribution summation
+2. Add the lambda dynamics method
