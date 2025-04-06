@@ -27,13 +27,13 @@ class model:
         if transition_function is not None:
             self.func = transition_function
 
-        #Set default model to the original ecological toy model
+        #Set default model to the original pandemic toy model
         else:
             print("Using Default Transition Function")
             print("Steady State at N = 100")
-            print("Parameters:", dm.eco_params)
-            self.func = dm.eco_transition_function
-            self.params = dm.eco_params
+            print("Parameters:", dm.pandemic_params)
+            self.func = dm.pandemic_transition_function
+            self.params = dm.pandemic_params
             self.num_groups = 'S'
             
         if self.num_groups == None:
@@ -49,11 +49,15 @@ class model:
         
 
         #Calculate initial derivatives, should be 0 at steady state
-        Z = rf.R_mean(self.func, self.states[-1], self.params, self.lambdas[-1])
-        f_mean = rf.R_mean(self.func, self.states[-1], self.params, self.lambdas[-1], lambda n: self.func(n, self.states[-1], self.params))/Z 
+        # The initial derivatives and calculations use <n>_(t-1) = 0.
+        m_effective = self.params['m_0']
+        Z = rf.R_mean(self.func, self.states[-1], m_effective, self.params, self.lambdas[-1])
+        f_mean = rf.R_mean(self.func, self.states[-1], m_effective, self.params, self.lambdas[-1], lambda n: self.func(n, self.states[-1], self.params))/Z 
         self.derivatives[-1] = f_mean
-        
 
+        # Initialize m_(t-1) to hold m_0 and <n>_(t-1) to hold <n>_0 after initialization.
+        self.params['m_(t-1)'] = self.params['m_0']
+        self.params['<n>_(t-1)'] = rf.Rn_mean(self.func, self.states[-1], m_effective, self.params, self.lambdas[-1])/Z
 
 
     def update(self, time:float, dt=0.1, error_lim=float("inf")) -> None:
@@ -68,20 +72,27 @@ class model:
         num_timesteps = int(time/dt)
 
 
-        #Main Update Loop
+        # Main Update Loop
         for timestep in range(num_timesteps):
             
             self.time.append(self.time[-1] + dt)
             self.states.append(self.states[-1] + dt * self.derivatives[-1])
 
-            #Update derivatives
-            Z = rf.R_mean(self.func, self.states[-1], self.params, self.lambdas[-1])
+            # Keep track of old m_(t-1) value for further computation.
+            old_m = self.params['m_(t-1)']
+            m_effective = old_m - self.params['tau'] * self.params['c1'] * self.params['d_0'] * self.params['<n>_(t-1)']
+
+            # Update derivatives
+            # Derivative update should use old mean so we don't update stored <n>_(t-1)
+            Z = rf.R_mean(self.func, self.states[-1], m_effective, self.params, self.lambdas[-1])
           
-            f_mean = rf.R_mean(self.func, self.states[-1], self.params, self.lambdas[-1], lambda n: self.func(n, self.states[-1], self.params))/Z 
+            f_mean = rf.R_mean(self.func, self.states[-1], m_effective, self.params, self.lambdas[-1], lambda n: self.func(n, self.states[-1], self.params))/Z 
            
             self.derivatives.append(f_mean * self.params[self.num_groups])
 
-     
+            n_mean = rf.Rn_mean(self.func, self.states[-1], m_effective, self.params, self.lambdas[-1])/Z
+
+            # Compute new lambdas using old values.
             new_lambda = self.brute_force_update()
             self.check_constraints(new_lambda, error_lim = error_lim)
                 
@@ -89,11 +100,13 @@ class model:
             
             self.lambdas.append(new_lambda)
 
+            # Update m_(t-1) to be set to m_effective, as this is the next iteration's value of m_(t-1).
+            self.params['m_(t-1)'] = m_effective
+            # Then, update <n>_(t-1) to be n_mean, the mean calculated using the old value of m and old lambdas.
+            self.params['<n>_(t-1)'] = n_mean
+            self.params['I_(t-1)'] = self.states[-2]
 
-            
-     
 
-    
     def brute_force_update(self, init : bool = False) -> list:
         """Returns lambda calculated with brute force method
 
@@ -117,10 +130,12 @@ class model:
             """
             if(init_lambdas):
                 lambdas[1] = 0
-            Z = rf.R_mean(self.func, self.states[-1], self.params, lambdas) #Calculate normalization factor
+            old_m = self.params['m_(t-1)']
+            m_effective = old_m - self.params['tau'] * self.params['c1'] * self.params['d_0'] * self.params['<n>_(t-1)']
+            Z = rf.R_mean(self.func, self.states[-1], m_effective, self.params, lambdas) #Calculate normalization factor
 
-            n_mean = rf.Rn_mean(self.func, self.states[-1], self.params, lambdas)/Z
-            f_mean = rf.R_mean(self.func, self.states[-1], self.params, lambdas, mean_func=lambda n: self.func(n, self.states[-1], self.params))/Z
+            n_mean = rf.Rn_mean(self.func, self.states[-1], m_effective, self.params, lambdas)/Z
+            f_mean = rf.R_mean(self.func, self.states[-1],  m_effective, self.params, lambdas, mean_func=lambda n: self.func(n, self.states[-1], self.params))/Z
 
             if init_lambdas:
                 return [n_mean * self.params[self.num_groups] - self.states[-1], 0]
@@ -129,7 +144,6 @@ class model:
         
 
         if init:
-           
             new_lambdas = fsolve(constraints, self.lambdas[-1], args=True)
             return new_lambdas
         
@@ -154,6 +168,8 @@ class model:
         """
         
         params_copy = dict(self.params)
+        old_m = self.params['m_(t-1)']
+        m_effective = old_m - self.params['tau'] * self.params['c1'] * self.params['d_0'] * self.params['<n>_(t-1)']
 
         def get_derivatives(par_val):
 
@@ -161,10 +177,10 @@ class model:
         
             lambdas = self.lambdas[0] #Lambda 1 is set to 0 at initial iteration
 
-            Z = rf.R_mean(self.func, self.states[-1], params_copy, lambdas) #Calculate normalization factor
+            Z = rf.R_mean(self.func, self.states[-1], m_effective, params_copy, lambdas) #Calculate normalization factor
 
-            
-            f_mean = rf.R_mean(self.func, self.states[-1], params_copy, lambdas, mean_func=lambda n: self.func(n, self.states[-1], params_copy))/Z
+
+            f_mean = rf.R_mean(self.func, self.states[-1], m_effective, params_copy, lambdas, mean_func=lambda n: self.func(n, self.states[-1], params_copy))/Z
             
             return f_mean #Want this to be 0
      
@@ -180,9 +196,11 @@ class model:
         """
         
         self.params[param_key] = new_val
+        old_m = self.params['m_(t-1)']
+        m_effective = old_m - self.params['tau'] * self.params['c1'] * self.params['d_0'] * self.params['<n>_(t-1)']
 
-        Z = rf.R_mean(self.func, self.states[-1], self.params, self.lambdas[-1]) #Calculate normalization factor 
-        f_mean = rf.R_mean(self.func, self.states[-1], self.params, self.lambdas[-1], mean_func=lambda n: self.func(n, self.states[-1], self.params))/Z
+        Z = rf.R_mean(self.func, self.states[-1], m_effective, self.params, self.lambdas[-1]) #Calculate normalization factor 
+        f_mean = rf.R_mean(self.func, self.states[-1], m_effective, self.params, self.lambdas[-1], mean_func=lambda n: self.func(n, self.states[-1], self.params))/Z
         self.derivatives[-1] = f_mean * self.params[self.num_groups]
 
 
@@ -194,12 +212,15 @@ class model:
             lambdas: list containing lambdas
             error_lim: error tolerance 
         """
-        Z = rf.R_mean(self.func, self.states[-1], self.params, lambdas) #Calculate normalization factor
+        old_m = self.params['m_(t-1)']
+        m_effective = old_m - self.params['tau'] * self.params['c1'] * self.params['d_0'] * self.params['<n>_(t-1)']
+        Z = rf.R_mean(self.func, self.states[-1], m_effective, self.params, lambdas) #Calculate normalization factor
 
-        n_mean = rf.Rn_mean(self.func, self.states[-1], self.params, lambdas)/Z
-        f_mean = rf.R_mean(self.func, self.states[-1], self.params, lambdas, mean_func=lambda n: self.func(n, self.states[-1], self.params))/Z
+        n_mean = rf.Rn_mean(self.func, self.states[-1], m_effective, self.params, lambdas)/Z
+        f_mean = rf.R_mean(self.func, self.states[-1], m_effective, self.params, lambdas, mean_func=lambda n: self.func(n, self.states[-1], self.params))/Z
 
         iter_num = len(self.states)
+        # print(n_mean * self.params[self.num_groups] - self.states[-1], error_lim)
         assert (n_mean * self.params[self.num_groups] - self.states[-1]) ** 2 < error_lim**2, "Constraints not satisfied at iteration " + str(iter_num)
         
 

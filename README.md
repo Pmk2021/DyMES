@@ -1,6 +1,6 @@
 # DyMES
 
-Simulation code for the pandemic model with transition function, m_eff, and r_eff functionalities.
+Simulation code for the pandemic model with transition function, `m_eff`, and `r_eff` functionalities.
 
 This code differs from the regular DyMES model in one important aspect: it takes the expectation over a probability distribution from 0 to `m_eff`, rather than from 0 to N. This is because, in a pandemic model, you cannot have more than `m_eff` infected individuals in a group.
 
